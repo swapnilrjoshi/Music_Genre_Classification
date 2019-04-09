@@ -15,6 +15,8 @@ import librosa.display
 from scipy.fftpack import fft
 import warnings
 warnings.filterwarnings(action='ignore')
+from tqdm import tqdm
+import pickle
 
 #loading csv metadata files 
 tracks=utils.load('tracks.csv')
@@ -161,3 +163,120 @@ librosa.display.specshow(log_stft, sr=sr, hop_length=hop_length, x_axis='time', 
 plt.colorbar(format='%+2.0f dB')
 plt.title('Power spectrogram')
 plt.tight_layout()
+
+###Collecting tracks paths
+names = os.listdir('C:/MusicClassification/fma_medium/')
+names.remove('README.txt')
+names.remove('checksums')
+files = [] 
+for name in names:
+    i_names = os.listdir('C:/MusicClassification/fma_medium/{}/'.format(name))
+    for n in i_names:
+        files.append('C:/MusicClassification/fma_medium/{}/{}'.format(name, n))
+del i_names,n,name
+
+###Collecting tracks info
+duration=44100*30
+#fft_all = []
+names = []
+my_dict={'short_tracks':0,
+         'short_tracks_no':[],
+         'no_samples_short':[],
+         'long_tracks':0,
+         'long_tracks_no':[],
+         'no_samples_long':[],
+         'faulty_tracks':[],
+         'names':[],
+         'sr':[]}
+
+for file in tqdm(files,total=len(files)):
+    try:
+        x, sr = librosa.load(file, sr=None, mono=True)
+        if x.shape[0] < duration:
+            samples_to_pad=duration - x.shape[0]
+#            x = np.append(x, np.zeros((samples_to_pad,)))
+            my_dict['short_tracks'] += 1
+            my_dict['short_tracks_no'].append(file[-10:-4])    
+            my_dict['no_samples_short'].append(samples_to_pad)
+        elif x.shape[0]> duration:
+            samples_to_truncate=x.shape[0]- duration
+#            x=x[:duration]
+            my_dict['long_tracks'] += 1
+            my_dict['long_tracks_no'].append(file[-10:-4])    
+            my_dict['no_samples_long'].append(samples_to_truncate)
+      #  _, val = custom_fft(x, sr)
+       # fft_all.append(val)
+        my_dict['names'].append(file[-10:-4])
+        my_dict['sr'].append(sr)
+    except:
+        my_dict['faulty_tracks'].append(file)
+
+#with open('fft_all', "wb") as fp:
+#    pickle.dump(fft_all, fp)
+with open('my_dict', "wb") as fp:
+    pickle.dump(my_dict, fp)
+    
+###faulty track numbers
+faulty_tracks=[l[-10:-4] for l in my_dict['faulty_tracks']]
+
+###longer track counts for different extra samples
+from collections import Counter
+long_cnt = Counter()
+for num in my_dict.get('no_samples_long') :
+    long_cnt[num] += 1
+print('{} tracks longer than 30s'.format(my_dict['long_tracks']))
+long_cnt
+
+###shorter track counts for different samples
+short_cnt = Counter()
+for num in my_dict.get('no_samples_short') :
+    short_cnt[num] += 1
+print('{} tracks shorter than 30s'.format(my_dict['short_tracks']))
+short_cnt
+
+###checking number of tracks with different sampling rates
+sr_cnt = Counter()
+for num in my_dict.get('sr') :
+    sr_cnt[num] += 1
+sr_cnt
+
+###Creating dataframes of track numbers with # samples long, short 
+long_dict={k:my_dict[k] for k in ('long_tracks_no','no_samples_long') if k in my_dict}
+long_tracks=pd.DataFrame.from_dict(long_dict)
+
+short_dict={k:my_dict[k] for k in ('short_tracks_no','no_samples_short') if k in my_dict}
+short_tracks=pd.DataFrame.from_dict(short_dict)
+
+name_dict={k:my_dict[k] for k in ('names','sr') if k in my_dict}
+name_sr=pd.DataFrame.from_dict(name_dict)
+
+####How many samples short or long due to different sampling rates
+sr_48000=name_sr[name_sr['sr']==48000]
+sr_48000=sr_48000.assign(no_samples_long=long_tracks.loc[long_tracks['long_tracks_no'].isin(sr_48000['names']),'no_samples_long'].values)
+sr_48000['no_samples_long'].unique()
+
+sr_22050=name_sr[name_sr['sr']==22050]
+sr_22050=sr_22050.assign(no_samples_short=short_tracks.loc[short_tracks['short_tracks_no'].isin(sr_22050['names']),'no_samples_short'].values)
+print('Diff between number of samples for sr 44100 and 22050 is {}'.format((44100*30)-(22050*30)))
+sr_22050['no_samples_short'].unique()
+
+sr_32000=name_sr[name_sr['sr']==32000]
+sr_32000=sr_32000.assign(no_samples_short=short_tracks.loc[short_tracks['short_tracks_no'].isin(sr_32000['names']),'no_samples_short'].values)
+print('Diff between number of samples for sr 44100 and 22050 is {}'.format((44100*30)-(32000*30)))
+sr_32000['no_samples_short'].unique()
+
+sr_44100=name_sr[name_sr['sr']==44100]
+n=short_tracks.loc[short_tracks['short_tracks_no'].isin(sr_44100['names']),'no_samples_short'].unique()
+n
+'''long tracks can be truncated but shorter tracks needs padding. Hence for lower sampling rates
+where reuired padding is high it is better to drop those considering small number of tracks with low sr'''
+
+less_sr_tracks=short_tracks[short_tracks['no_samples_short']>1033]
+faulty_less_sr_tracks=faulty_tracks+list(less_sr_tracks['short_tracks_no'])
+len(faulty_less_sr_tracks) 
+
+with open('Faulty_tracks', "wb") as fp:
+    pickle.dump(faulty_less_sr_tracks, fp)
+### Checking genres of faulty tracks to check if they are from smaller category
+discard_tracks_genre=medium_subset.loc[list(map(int,faulty_less_sr_tracks)),('track','genre_top')]
+discard_tracks_genre.value_counts()
